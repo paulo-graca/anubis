@@ -1,0 +1,58 @@
+name: Docker build
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - overlay/**
+      - .github/workflows/docker-build.yml
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - overlay/**
+      - .github/workflows/docker-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: anubis-rcaap:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run -d --name anubis -p 8923:8923 \
+            -e TARGET=http://127.0.0.1:3000 \
+            -e ED25519_PRIVATE_KEY_HEX="$(openssl rand -hex 32)" \
+            anubis-rcaap:ci
+          img=http://localhost:8923/.within.website/x/cmd/anubis/static/img/pensive.webp
+          for i in $(seq 1 15); do
+            curl -fsS -o /dev/null "$img" && break
+            sleep 2
+          done
+          curl -fsS "$img" -o pensive.webp
+          cmp pensive.webp overlay/web/static/img/pensive.webp
+          curl -sS -H 'User-Agent: Mozilla/5.0' -H 'Accept: text/html' http://localhost:8923/ | grep -q "RCAAP"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs anubis
